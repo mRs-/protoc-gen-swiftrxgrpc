@@ -74,22 +74,28 @@ extension Generator {
     printParameters()
     printRequestParameter()
     printCallOptionsParameter()
-    println("/// - Returns: A `Single<\(methodOutputName)>` with metadata, status and response.")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Single<\(methodOutputName)> {")
-    indent()
-    println("Single.create { single in ")
-    indent()
-    println("let future = self.\(methodFunctionName)(request, callOptions: callOptions)")
-    println("future.response.whenFailure { single(.error($0)) }")
-    println("future.response.whenSuccess {")
-    indent()
-    println("single(.success($0))")
-    outdent()
-    println("}")
-    outdent()
-    println("return Disposables.create()")
-    println("}")
-    outdent()
+    println("/// - Returns: A `(response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>)` with response, status and metadata (initial and trailing).")
+    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> (response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("""
+    let call = self.\(methodFunctionName)(request, callOptions: callOptions)
+    return
+        (response: .create{ single in
+            call.response.whenFailure { single(.error($0)) }
+            call.response.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }, status: .create { single in
+            call.status.whenFailure { single(.error($0)) }
+            call.status.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }, metadata: .create { observable in
+            call.initialMetadata.whenFailure { observable.onError($0) }
+            call.initialMetadata.whenSuccess { observable.onNext($0) }
+            call.trailingMetadata.whenFailure { observable.onError($0) }
+            call.trailingMetadata.whenSuccess { observable.onNext($0) }
+            return Disposables.create()
+        })
+    """)
+    println()
   }
   
   fileprivate func makeServerStreaming(_ streamType: StreamingType) {
@@ -98,42 +104,39 @@ extension Generator {
     printParameters()
     printRequestParameter()
     printCallOptionsParameter()
-    println("/// - Returns: A `Observable<\(methodOutputName)>` with the metadata and status.")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<\(methodOutputName)> {")
-    indent()
-    println("Observable.create { observer in")
-    indent()
-    println("let call = self.receiveTranslatedDocument(request, callOptions: callOptions) { chunk in")
-    println("observer.onNext(chunk)")
-    outdent()
-    println("}")
-    println("call.status.whenComplete {")
-    indent()
-    println("switch $0 {")
-    println("case .success(let status):")
-    indent()
-    println("switch status.code {")
-    println("case .ok:")
-    indent()
-    println("observer.onCompleted()")
-    outdent()
-    println("default:")
-    indent()
-    println("observer.onError(status)")
-    outdent()
-    println("}")
-    outdent()
-    println("case .failure(let error):")
-    indent()
-    println("observer.onError(error)")
-    outdent()
-    println("}")
-    outdent()
-    println("}")
-    println("return Disposables.create()")
-    outdent()
-    println("}")
-    outdent()
+    println("/// - Returns: A (response: Observable<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) with response, status and metadata (initial and trailing).")
+    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> (response: Observable<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("""
+        let response = PublishSubject<\(methodOutputName)>()
+        let statusSingle = PublishSubject<GRPCStatus>()
+        let metadata = PublishSubject<HPACKHeaders>()
+        
+        let call = self.\(methodFunctionName)(request, callOptions: callOptions, handler: { message in
+            response.onNext(message)
+        })
+        
+        call.status.whenFailure { statusSingle.onError($0) }
+        call.status.whenSuccess { statusSingle.onNext($0) }
+        call.status.whenComplete {
+            switch $0 {
+            case .success(let status):
+                switch status.code {
+                case .ok:
+                    response.onCompleted()
+                default:
+                    response.onError(status)
+                }
+            case .failure(let error):
+                response.onError(error)
+            }
+        }
+        call.initialMetadata.whenFailure { metadata.onError($0) }
+        call.initialMetadata.whenSuccess { metadata.onNext($0) }
+        call.trailingMetadata.whenFailure { metadata.onError($0) }
+        call.trailingMetadata.whenSuccess { metadata.onNext($0) }
+        
+        return (response.asObservable(), statusSingle.asSingle(), metadata.asObservable())
+    """)
   }
   
   fileprivate func makeClientStreaming(_ streamType: StreamingType) {
@@ -144,41 +147,39 @@ extension Generator {
     printParameters()
     println("///   - messages: `Observable<\(methodInputName)>` stream of the messages you want to send.")
     printCallOptionsParameter()
-    println("/// - Returns: A `Single<\(methodOutputName)>` with the metadata, status and response.")
-    println("func \(methodFunctionName)Rx(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> Single<\(methodOutputName)> {")
-    indent()
-    println("Single.create { single -> Disposable in")
-    indent()
-    println("let future = self.\(methodFunctionName)(callOptions: callOptions)")
-    println("let disposable = messages.subscribe(onNext: {")
-    indent()
-    println("let message = future.sendMessage($0)")
-    println("message.whenFailure { single(.error($0)) }")
-    outdent()
-    println("}, onCompleted: {")
-    indent()
-    println("let end = future.sendEnd()")
-    println("end.whenFailure { single(.error($0)) }")
-    outdent()
-    println("})")
-    println("future.response.whenComplete {")
-    indent()
-    println("switch $0 {")
-    println("case .success(let response):")
-    indent()
-    println("single(.success(response))")
-    outdent()
-    println("case .failure(let error):")
-    indent()
-    println("single(.error(error))")
-    outdent()
-    println("}")
-    outdent()
-    println("}")
-    println("return disposable")
-    outdent()
-    println("}")
-    outdent()
+    println("/// - Returns: A `(response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>)` with response, status and metadata (initial and trailing).")
+    println("func \(methodFunctionName)Rx(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> (response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("""
+        let call = self.\(methodFunctionName)(callOptions: callOptions)
+        return (response: .create{ single in
+            let disposable = messages.subscribe(onNext: {
+              let message = call.sendMessage($0)
+              message.whenFailure { single(.error($0)) }
+            }, onCompleted: {
+              let end = call.sendEnd()
+              end.whenFailure { single(.error($0)) }
+            })
+            call.response.whenComplete {
+              switch $0 {
+              case .success(let response):
+                single(.success(response))
+              case .failure(let error):
+                single(.error(error))
+              }
+            }
+            return disposable
+        }, status: .create { single in
+            call.status.whenFailure { single(.error($0)) }
+            call.status.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }, metadata: .create { observable in
+            call.initialMetadata.whenFailure { observable.onError($0) }
+            call.initialMetadata.whenSuccess { observable.onNext($0) }
+            call.trailingMetadata.whenFailure { observable.onError($0) }
+            call.trailingMetadata.whenSuccess { observable.onNext($0) }
+            return Disposables.create()
+        })
+    """)
   }
   
   fileprivate func makeBidirectionalStreaming() {

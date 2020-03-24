@@ -86,6 +86,7 @@ class Generator {
         "Foundation",
         "NIO",
         "NIOHTTP1",
+        "NIOHPACK",
         "GRPC",
         "SwiftProtobuf",
         "RxSwift"
