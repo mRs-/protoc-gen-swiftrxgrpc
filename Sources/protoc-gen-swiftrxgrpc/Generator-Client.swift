@@ -23,7 +23,6 @@ extension Generator {
   }
   
   private func printServiceClientImplementation() {
-    
     println("\(access) extension \(clientProtocolName) {")
     indent()
     indent()
@@ -74,26 +73,61 @@ extension Generator {
     printParameters()
     printRequestParameter()
     printCallOptionsParameter()
-    println("/// - Returns: A `(response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>)` with response, status and metadata (initial and trailing).")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> (response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
+    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
     println("""
-    let call = self.\(methodFunctionName)(request, callOptions: callOptions)
-    return
-        (response: .create{ single in
+    let call = \(methodFunctionName)(request, callOptions: callOptions)
+        
+        let response = Single<\(methodOutputName)>.create { single in
             call.response.whenFailure { single(.error($0)) }
             call.response.whenSuccess { single(.success($0)) }
             return Disposables.create()
-        }, status: .create { single in
+        }
+
+        let initialMetadata = Single<HPACKHeaders>.create { single in
+            call.initialMetadata.whenFailure { single(.error($0)) }
+            call.initialMetadata.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }
+
+        let trailingMetadata = Single<HPACKHeaders>.create { single in
+            call.trailingMetadata.whenFailure { single(.error($0)) }
+            call.trailingMetadata.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }
+
+        let status = Single<GRPCStatus>.create { single in
             call.status.whenFailure { single(.error($0)) }
             call.status.whenSuccess { single(.success($0)) }
             return Disposables.create()
-        }, metadata: .create { observable in
-            call.initialMetadata.whenFailure { observable.onError($0) }
-            call.initialMetadata.whenSuccess { observable.onNext($0) }
-            call.trailingMetadata.whenFailure { observable.onError($0) }
-            call.trailingMetadata.whenSuccess { observable.onNext($0) }
-            return Disposables.create()
-        })
+        }
+        
+        var completed = false
+        
+        return Observable
+            .combineLatest(status.startWithNil(),
+                           response.startWithNil(),
+                           initialMetadata.startWithNil(),
+                           trailingMetadata.startWithNil())
+            .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
+                switch tuple {
+                case (nil, nil, let .some(initial), nil):
+                    return .just(.initial(metadata: initial))
+                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
+                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
+                case let (.some(status), _, initial, trailing):
+                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                default:
+                    return .empty()
+                }
+            }
+            .do(onCompleted: {
+                completed = true
+            }, onDispose: {
+                if !completed {
+                    _ = call.cancel()
+                }
+            })
     """)
     println()
   }
@@ -104,38 +138,66 @@ extension Generator {
     printParameters()
     printRequestParameter()
     printCallOptionsParameter()
-    println("/// - Returns: A (response: Observable<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) with response, status and metadata (initial and trailing).")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> (response: Observable<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
+    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
     println("""
-        let response = PublishSubject<\(methodOutputName)>()
-        let statusSingle = PublishSubject<GRPCStatus>()
-        let metadata = PublishSubject<HPACKHeaders>()
-        
-        let call = self.\(methodFunctionName)(request, callOptions: callOptions, handler: { message in
+        let response = PublishSubject<\(methodOutputName)?>()
+        let call = \(methodFunctionName)(request, callOptions: callOptions) { message in
             response.onNext(message)
-        })
-        
-        call.status.whenFailure { statusSingle.onError($0) }
-        call.status.whenSuccess { statusSingle.onNext($0) }
-        call.status.whenComplete {
-            switch $0 {
-            case .success(let status):
-                switch status.code {
-                case .ok:
-                    response.onCompleted()
-                default:
-                    response.onError(status)
-                }
-            case .failure(let error):
-                response.onError(error)
-            }
         }
-        call.initialMetadata.whenFailure { metadata.onError($0) }
-        call.initialMetadata.whenSuccess { metadata.onNext($0) }
-        call.trailingMetadata.whenFailure { metadata.onError($0) }
-        call.trailingMetadata.whenSuccess { metadata.onNext($0) }
+
+        let status = Single<GRPCStatus>.create { single in
+            call.status.whenFailure {
+                single(.error($0))
+                response.onError($0)
+            }
+            call.status.whenSuccess {
+                single(.success($0))
+                response.onCompleted()
+            }
+            return Disposables.create()
+        }
+
+        let initialMetadata = Single<HPACKHeaders>.create { single in
+            call.initialMetadata.whenFailure { single(.error($0)) }
+            call.initialMetadata.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }
+
+        let trailingMetadata = Single<HPACKHeaders>.create { single in
+            call.trailingMetadata.whenFailure { single(.error($0)) }
+            call.trailingMetadata.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }
+
+        var completed = false
         
-        return (response.asObservable(), statusSingle.asSingle(), metadata.asObservable())
+        return Observable
+            .combineLatest(status.startWithNil(),
+                           response.startWith(nil),
+                           initialMetadata.startWithNil(),
+                           trailingMetadata.startWithNil())
+            .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
+                switch tuple {
+                case (nil, nil, let .some(initial), nil):
+                    return .just(.initial(metadata: initial))
+                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
+                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
+                case let (.none, .some(response), initial, trailing):
+                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
+                case let (.some(status), _, initial, trailing):
+                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                default:
+                    return .empty()
+                }
+            }
+            .do(onCompleted: {
+                completed = true
+            }, onDispose: {
+                if !completed {
+                    _ = call.cancel()
+                }
+            })
     """)
   }
   
@@ -147,38 +209,67 @@ extension Generator {
     printParameters()
     println("///   - messages: `Observable<\(methodInputName)>` stream of the messages you want to send.")
     printCallOptionsParameter()
-    println("/// - Returns: A `(response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>)` with response, status and metadata (initial and trailing).")
-    println("func \(methodFunctionName)Rx(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> (response: Single<\(methodOutputName)>, status: Single<GRPCStatus>, metadata: Observable<HPACKHeaders>) {")
+    println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
+    println("func \(methodFunctionName)Rx(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
     println("""
-        let call = self.\(methodFunctionName)(callOptions: callOptions)
-        return (response: .create{ single in
-            let disposable = messages.subscribe(onNext: {
-              let message = call.sendMessage($0)
-              message.whenFailure { single(.error($0)) }
-            }, onCompleted: {
-              let end = call.sendEnd()
-              end.whenFailure { single(.error($0)) }
-            })
-            call.response.whenComplete {
-              switch $0 {
-              case .success(let response):
-                single(.success(response))
-              case .failure(let error):
-                single(.error(error))
-              }
-            }
-            return disposable
-        }, status: .create { single in
+        let call = \(methodFunctionName)(callOptions: callOptions)
+        let status = Single<GRPCStatus>.create { single in
             call.status.whenFailure { single(.error($0)) }
             call.status.whenSuccess { single(.success($0)) }
             return Disposables.create()
-        }, metadata: .create { observable in
-            call.initialMetadata.whenFailure { observable.onError($0) }
-            call.initialMetadata.whenSuccess { observable.onNext($0) }
-            call.trailingMetadata.whenFailure { observable.onError($0) }
-            call.trailingMetadata.whenSuccess { observable.onNext($0) }
+        }
+
+        let response = Single<\(methodOutputName)>.create { single in
+            let disposable = messages.subscribe(onNext: {
+                let message = call.sendMessage($0)
+                message.whenFailure { single(.error($0)) }
+            }, onCompleted: {
+                let end = call.sendEnd()
+                end.whenFailure { single(.error($0)) }
+            })
+            call.response.whenFailure { single(.error($0)) }
+            call.response.whenSuccess { single(.success($0)) }
+            return disposable
+        }
+
+        let initialMetadata = Single<HPACKHeaders>.create { single in
+            call.initialMetadata.whenFailure { single(.error($0)) }
+            call.initialMetadata.whenSuccess { single(.success($0)) }
             return Disposables.create()
-        })
+        }
+
+        let trailingMetadata = Single<HPACKHeaders>.create { single in
+            call.trailingMetadata.whenFailure { single(.error($0)) }
+            call.trailingMetadata.whenSuccess { single(.success($0)) }
+            return Disposables.create()
+        }
+
+        var completed = false
+        
+        return Observable
+            .combineLatest(status.startWithNil(),
+                           response.startWithNil(),
+                           initialMetadata.startWithNil(),
+                           trailingMetadata.startWithNil())
+            .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
+                switch tuple {
+                case (nil, nil, let .some(initial), nil):
+                    return .just(.initial(metadata: initial))
+                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
+                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
+                case let (.some(status), _, initial, trailing):
+                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                default:
+                    return .empty()
+                }
+            }
+            .do(onCompleted: {
+                completed = true
+            }, onDispose: {
+                if !completed {
+                    _ = call.cancel()
+                }
+            })
     """)
   }
   
