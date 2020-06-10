@@ -74,7 +74,7 @@ extension Generator {
     printRequestParameter()
     printCallOptionsParameter()
     println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
+    println("func rx\(methodFunctionName.capitalizingFirstLetter())(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
     println("""
     let call = \(methodFunctionName)(request, callOptions: callOptions)
         
@@ -138,8 +138,8 @@ extension Generator {
     printParameters()
     printRequestParameter()
     printCallOptionsParameter()
-    println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
-    println("func \(methodFunctionName)Rx(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
+    println("/// - Returns: Observable ClientStreamingResult<\(methodOutputName)> with initialMetadata and finished call.")
+    println("func rx\(methodFunctionName.capitalizingFirstLetter())(_ request: \(methodInputName), callOptions: CallOptions? = nil) -> Observable<ClientStreamingResult<\(methodOutputName)>> {")
     println("""
         let response = PublishSubject<\(methodOutputName)?>()
         let call = \(methodFunctionName)(request, callOptions: callOptions) { message in
@@ -177,16 +177,14 @@ extension Generator {
                            response.startWith(nil),
                            initialMetadata.startWithNil(),
                            trailingMetadata.startWithNil())
-            .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
+            .flatMap { tuple -> Observable<ClientStreamingResult<ReceiveTranslatedDocumentResponseChunk>> in
                 switch tuple {
                 case (nil, nil, let .some(initial), nil):
                     return .just(.initial(metadata: initial))
-                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
-                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
-                case let (.none, .some(response), initial, trailing):
-                    return .just(.finished(result: .success(response), metadata: (initial, trailing)))
                 case let (.some(status), _, initial, trailing):
-                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                    return .just(.finished(status: status, metadata: (initial, trailing)))
+                case let (.none, .some(response), _, .none):
+                    return .just(.streaming(response: response))
                 default:
                     return .empty()
                 }
@@ -210,7 +208,7 @@ extension Generator {
     println("///   - messages: `Observable<\(methodInputName)>` stream of the messages you want to send.")
     printCallOptionsParameter()
     println("/// - Returns: Observable ClientResult<\(methodOutputName)> with initialMetadata and finished call.")
-    println("func \(methodFunctionName)Rx(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
+    println("func rx\(methodFunctionName.capitalizingFirstLetter())(messages: Observable<\(methodInputName)>, callOptions: CallOptions? = nil) -> Observable<ClientResult<\(methodOutputName)>> {")
     println("""
         let call = \(methodFunctionName)(callOptions: callOptions)
         let status = Single<GRPCStatus>.create { single in
@@ -308,4 +306,14 @@ extension MethodDescriptor {
       return sourceComments  // already prefixed with "///"
     }
   }
+}
+
+private extension String {
+    func capitalizingFirstLetter() -> String {
+        return prefix(1).capitalized + dropFirst()
+    }
+
+    mutating func capitalizeFirstLetter() {
+        self = self.capitalizingFirstLetter()
+    }
 }
