@@ -116,10 +116,19 @@ extension Generator {
                 case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
                     return .just(.finished(result: .success(response), metadata: (initial, trailing)))
                 case let (.some(status), _, initial, trailing):
-                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                    return .just(.finished(result: .failure(.status(status)), metadata: (initial, trailing)))
                 default:
                     return .empty()
                 }
+            }
+            .catchError{ error in
+                guard let grpcStatus = error as? GRPCStatus else {
+                    return .just(.finished(result: .failure(.other(error)),
+                    metadata: (initial: nil, trailing: nil)))
+                    
+                }
+                return .just(.finished(result: .failure(.status(grpcStatus)),
+                metadata: (initial: nil, trailing: nil)))
             }
             .do(onCompleted: {
                 completed = true
@@ -182,12 +191,20 @@ extension Generator {
                 case (nil, nil, let .some(initial), nil):
                     return .just(.initial(metadata: initial))
                 case let (.some(status), _, initial, trailing):
-                    return .just(.finished(status: status, metadata: (initial, trailing)))
+                    return .just(.finished(result: .success(ClientOK()), metadata: (initial, trailing)))
                 case let (.none, .some(response), _, .none):
                     return .just(.streaming(response: response))
                 default:
                     return .empty()
                 }
+            }
+            .catchError{ error in
+                guard let grpcStatus = error as? GRPCStatus else {
+                    return .just(.finished(result: .failure(.other(error)),
+                                           metadata: (initial: nil, trailing: nil)))
+                }
+                return .just(.finished(result: .failure(.status(grpcStatus)),
+                                       metadata: (initial: nil, trailing: nil)))
             }
             .do(onCompleted: {
                 completed = true
@@ -256,10 +273,19 @@ extension Generator {
                 case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
                     return .just(.finished(result: .success(response), metadata: (initial, trailing)))
                 case let (.some(status), _, initial, trailing):
-                    return .just(.finished(result: .failure(status), metadata: (initial, trailing)))
+                    return .just(.finished(result: .failure(.status(status)), metadata: (initial, trailing)))
                 default:
                     return .empty()
                 }
+            }
+            .catchError{ error in
+                guard let grpcStatus = error as? GRPCStatus else {
+                    return .just(.finished(result: .failure(.other(error)),
+                    metadata: (initial: nil, trailing: nil)))
+                    
+                }
+                return .just(.finished(result: .failure(.status(grpcStatus)),
+                metadata: (initial: nil, trailing: nil)))
             }
             .do(onCompleted: {
                 completed = true
