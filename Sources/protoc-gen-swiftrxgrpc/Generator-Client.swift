@@ -105,17 +105,16 @@ extension Generator {
         var completed = false
         
         return Observable
-            .combineLatest(status.startWithNil(),
+            .combineLatest(initialMetadata.startWithNil(),
                            response.startWithNil(),
-                           initialMetadata.startWithNil(),
-                           trailingMetadata.startWithNil())
+                           Observable.zip(status.startWithNil(), trailingMetadata.startWithNil()))
             .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
                 switch tuple {
-                case (nil, nil, let .some(initial), nil):
+                case (let .some(initial), nil, (nil, nil)):
                     return .just(.initial(metadata: initial))
-                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
+                case let (initial, .some(response), (.some(status), trailing)) where status.code == .ok:
                     return .just(.finished(result: .success(response), metadata: (initial, trailing)))
-                case let (.some(status), _, initial, trailing):
+                case let (initial, _, (.some(status), trailing)):
                     return .just(.finished(result: .failure(.status(status)), metadata: (initial, trailing)))
                 default:
                     return .empty()
@@ -134,7 +133,7 @@ extension Generator {
                 completed = true
             }, onDispose: {
                 if !completed {
-                    _ = call.cancel()
+                    call.cancel(promise: nil)
                 }
             })
     """)
@@ -186,7 +185,7 @@ extension Generator {
                            response.startWith(nil),
                            initialMetadata.startWithNil(),
                            trailingMetadata.startWithNil())
-            .flatMap { tuple -> Observable<ClientStreamingResult<ReceiveTranslatedDocumentResponseChunk>> in
+            .flatMap { tuple -> Observable<ClientStreamingResult<\(methodOutputName)>> in
                 switch tuple {
                 case (nil, nil, let .some(initial), nil):
                     return .just(.initial(metadata: initial))
@@ -210,7 +209,7 @@ extension Generator {
                 completed = true
             }, onDispose: {
                 if !completed {
-                    _ = call.cancel()
+                    call.cancel(promise: nil)
                 }
             })
     """)
@@ -262,17 +261,16 @@ extension Generator {
         var completed = false
         
         return Observable
-            .combineLatest(status.startWithNil(),
+            .combineLatest(initialMetadata.startWithNil(),
                            response.startWithNil(),
-                           initialMetadata.startWithNil(),
-                           trailingMetadata.startWithNil())
+                           Observable.zip(status.startWithNil(), trailingMetadata.startWithNil()))
             .flatMap { tuple -> Observable<ClientResult<\(methodOutputName)>> in
                 switch tuple {
-                case (nil, nil, let .some(initial), nil):
+                case (let .some(initial), nil, (nil, nil)):
                     return .just(.initial(metadata: initial))
-                case let (.some(status), .some(response), initial, trailing) where status.code == .ok:
+                case let (initial, .some(response), (.some(status), trailing)) where status.code == .ok:
                     return .just(.finished(result: .success(response), metadata: (initial, trailing)))
-                case let (.some(status), _, initial, trailing):
+                case let (initial, _, (.some(status), trailing)):
                     return .just(.finished(result: .failure(.status(status)), metadata: (initial, trailing)))
                 default:
                     return .empty()
@@ -291,7 +289,7 @@ extension Generator {
                 completed = true
             }, onDispose: {
                 if !completed {
-                    _ = call.cancel()
+                    call.cancel(promise: nil)
                 }
             })
     """)
