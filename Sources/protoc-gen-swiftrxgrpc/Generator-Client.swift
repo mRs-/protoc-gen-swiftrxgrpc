@@ -189,7 +189,7 @@ extension Generator {
                 switch tuple {
                 case (nil, nil, let .some(initial), nil):
                     return .just(.initial(metadata: initial))
-                case let (.some(status), _, initial, trailing):
+                case let (.some(_), _, initial, trailing):
                     return .just(.finished(result: .success(ClientOK()), metadata: (initial, trailing)))
                 case let (.none, .some(response), _, .none):
                     return .just(.streaming(response: response))
@@ -237,6 +237,9 @@ extension Generator {
             let disposable = messages.subscribe(onNext: {
                 let message = call.sendMessage($0)
                 message.whenFailure { single(.error($0)) }
+            }, onError: { error in
+                _ = call.sendEnd()
+                single(.error(error))
             }, onCompleted: {
                 let end = call.sendEnd()
                 end.whenFailure { single(.error($0)) }
